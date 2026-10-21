@@ -68,9 +68,8 @@ const [pendingRoles, setPendingRoles] = useState<Record<string, StaffRole>>(
 );
 const [statusFilter, setStatusFilter] = useState<
 "all" | "active" | "inactive"
-
-«("all");
-const [roleFilter, setRoleFilter] = useState<"all" | StaffRole>("all");»
+>("all");
+const [roleFilter, setRoleFilter] = useState<"all" | StaffRole>("all");
 
 const loadStaff = useCallback(async () => {
 setLoading(true);
