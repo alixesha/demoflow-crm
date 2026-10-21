@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
@@ -13,12 +14,7 @@ import {
 
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
-import {
-  OUTCOME_LABEL,
-  STATUS_LABEL,
-  type AppointmentStatus,
-  type DemoOutcome,
-} from "@/lib/labels";
+import type { AppointmentStatus, DemoOutcome } from "@/lib/labels";
 import {
   ErrorBox,
   Loading,
@@ -43,6 +39,7 @@ type RecentAppointment = {
   local_time: string;
   status: AppointmentStatus;
   outcome: DemoOutcome | null;
+  sale_amount: number | null;
   clients: {
     business_name: string;
     owner_name: string;
@@ -50,7 +47,9 @@ type RecentAppointment = {
 };
 
 function Dashboard() {
-  const { profile } = useAuth();
+  const { profile, hasRole } = useAuth();
+  const isAdmin = hasRole("admin");
+  const isDemoStaff = hasRole("demo_staff");
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +57,7 @@ function Dashboard() {
   const [upcoming, setUpcoming] = useState(0);
   const [followUps, setFollowUps] = useState(0);
   const [sales, setSales] = useState(0);
+  const [salesAmount, setSalesAmount] = useState(0);
   const [recent, setRecent] = useState<RecentAppointment[]>([]);
 
   const loadDashboard = useCallback(async () => {
@@ -66,7 +66,59 @@ function Dashboard() {
 
     try {
       const now = new Date().toISOString();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = new Date().toLocaleDateString("en-CA");
+
+      let baseQuery = supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("is_demo", false);
+
+      let upcomingQuery = supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("is_demo", false)
+        .in("status", ["scheduled", "rescheduled"])
+        .gte("scheduled_at", now);
+
+      let followUpQuery = supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("is_demo", false)
+        .eq("outcome", "follow_up_required")
+        .not("follow_up_date", "is", null)
+        .lte("follow_up_date", today);
+
+      let salesQuery = supabase
+        .from("appointments")
+        .select("sale_amount")
+        .eq("is_demo", false)
+        .eq("outcome", "sold");
+
+      let recentQuery = supabase
+        .from("appointments")
+        .select(
+          "id, created_at, scheduled_at, local_date, local_time, status, outcome, sale_amount, clients(business_name, owner_name)"
+        )
+        .eq("is_demo", false)
+        .order("created_at", { ascending: false })
+        .limit(6);
+
+      // Agents should see their own appointment metrics.
+      // Database RLS must independently enforce the same restrictions.
+      if (!isAdmin && !isDemoStaff) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const currentUserId = sessionData.session?.user.id;
+
+        if (!currentUserId) {
+          throw new Error("Your session has expired. Please sign in again.");
+        }
+
+        baseQuery = baseQuery.eq("booking_agent_id", currentUserId);
+        upcomingQuery = upcomingQuery.eq("booking_agent_id", currentUserId);
+        followUpQuery = followUpQuery.eq("booking_agent_id", currentUserId);
+        salesQuery = salesQuery.eq("booking_agent_id", currentUserId);
+        recentQuery = recentQuery.eq("booking_agent_id", currentUserId);
+      }
 
       const [
         totalResult,
@@ -75,40 +127,11 @@ function Dashboard() {
         salesResult,
         recentResult,
       ] = await Promise.all([
-        supabase
-          .from("appointments")
-          .select("id", { count: "exact", head: true })
-          .eq("is_demo", false),
-
-        supabase
-          .from("appointments")
-          .select("id", { count: "exact", head: true })
-          .eq("is_demo", false)
-          .in("status", ["scheduled", "rescheduled"])
-          .gte("scheduled_at", now),
-
-        supabase
-          .from("appointments")
-          .select("id", { count: "exact", head: true })
-          .eq("is_demo", false)
-          .eq("outcome", "follow_up_required")
-          .not("follow_up_date", "is", null)
-          .lte("follow_up_date", today),
-
-        supabase
-          .from("appointments")
-          .select("id", { count: "exact", head: true })
-          .eq("is_demo", false)
-          .eq("outcome", "sold"),
-
-        supabase
-          .from("appointments")
-          .select(
-            "id, created_at, scheduled_at, local_date, local_time, status, outcome, clients(business_name, owner_name)",
-          )
-          .eq("is_demo", false)
-          .order("created_at", { ascending: false })
-          .limit(6),
+        baseQuery,
+        upcomingQuery,
+        followUpQuery,
+        salesQuery,
+        recentQuery,
       ]);
 
       const firstError =
@@ -123,18 +146,24 @@ function Dashboard() {
       setTotal(totalResult.count ?? 0);
       setUpcoming(upcomingResult.count ?? 0);
       setFollowUps(followUpResult.count ?? 0);
-      setSales(salesResult.count ?? 0);
-      setRecent((recentResult.data ?? []) as RecentAppointment[]);
+
+      const soldRows = salesResult.data ?? [];
+      setSales(soldRows.length);
+      setSalesAmount(
+        soldRows.reduce((sum, row) => sum + (row.sale_amount ?? 0), 0)
+      );
+
+      setRecent((recentResult.data ?? []) as unknown as RecentAppointment[]);
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Dashboard data could not be loaded.",
+          : "Dashboard data could not be loaded."
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAdmin, isDemoStaff]);
 
   useEffect(() => {
     void loadDashboard();
@@ -147,6 +176,7 @@ function Dashboard() {
         subtitle="Your website demo operations at a glance."
         actions={
           <button
+            type="button"
             onClick={() => void loadDashboard()}
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
@@ -179,7 +209,7 @@ function Dashboard() {
           <div>
             <p className="text-sm font-semibold">DemoDesk CRM</p>
             <p className="text-xs text-muted-foreground">
-              Live workspace
+              Appointment workspace
             </p>
           </div>
         </div>
@@ -187,8 +217,9 @@ function Dashboard() {
 
       {error && (
         <div className="space-y-3">
-          <ErrorBox error={error} />
+          <ErrorBox message={error} />
           <button
+            type="button"
             onClick={() => void loadDashboard()}
             className="text-sm font-medium text-primary hover:underline"
           >
@@ -198,7 +229,7 @@ function Dashboard() {
       )}
 
       <section>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="font-display text-lg font-semibold">
             Performance overview
           </h2>
@@ -226,13 +257,13 @@ function Dashboard() {
             <Stat
               label="Follow-ups Due"
               value={followUps.toLocaleString()}
-              hint="Required follow-ups due today or earlier"
+              hint="Due today or overdue"
               icon={AlertCircle}
             />
             <Stat
               label="Sales Closed"
               value={sales.toLocaleString()}
-              hint="Appointments marked as sold"
+              hint={`Recorded sales: ${salesAmount.toLocaleString()}`}
               icon={TrendingUp}
             />
           </div>
@@ -251,7 +282,7 @@ function Dashboard() {
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <CheckCircle2 className="h-4 w-4" />
-            Live database
+            Database connected
           </div>
         </div>
 
@@ -264,12 +295,20 @@ function Dashboard() {
             <p className="mt-1 text-sm text-muted-foreground">
               Your latest bookings will appear here when they are added.
             </p>
+            <Link
+              to="/appointments/new"
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+            >
+              Create appointment <ArrowUpRight className="h-4 w-4" />
+            </Link>
           </div>
         ) : (
           <div className="divide-y divide-border">
             {recent.map((appointment) => (
-              <div
+              <Link
                 key={appointment.id}
+                to="/appointments/$id"
+                params={{ id: appointment.id }}
                 className="flex flex-col gap-3 p-5 transition-colors hover:bg-muted/30 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex min-w-0 items-start gap-3">
@@ -279,8 +318,7 @@ function Dashboard() {
 
                   <div className="min-w-0">
                     <p className="truncate font-semibold">
-                      {appointment.clients?.business_name ||
-                        "Unnamed client"}
+                      {appointment.clients?.business_name || "Unnamed client"}
                     </p>
                     <p className="mt-1 text-sm text-muted-foreground">
                       {appointment.clients?.owner_name || "No contact name"}
@@ -294,8 +332,9 @@ function Dashboard() {
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   <StatusPill status={appointment.status} />
                   <OutcomePill outcome={appointment.outcome} />
+                  <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}
@@ -309,9 +348,9 @@ function Dashboard() {
       </section>
 
       <p className="text-center text-xs text-muted-foreground">
-        Appointment access follows your account's database permissions.
+        Appointment access follows your account&apos;s database permissions.
       </p>
     </div>
   );
-        }
+    }
             
