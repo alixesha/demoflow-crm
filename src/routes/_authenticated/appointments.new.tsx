@@ -27,7 +27,6 @@ function localDateTimeToUtc(
 ): Date {
   const [year, month, day] = date.split("-").map(Number);
   const [hour, minute] = time.split(":").map(Number);
-
   const targetMs = Date.UTC(year, month - 1, day, hour, minute);
   let guess = new Date(targetMs);
 
@@ -45,9 +44,7 @@ function localDateTimeToUtc(
     const parts = formatter.formatToParts(guess);
     const values: Record<string, string> = {};
 
-    for (const part of parts) {
-      values[part.type] = part.value;
-    }
+    for (const part of parts) values[part.type] = part.value;
 
     const representedMs = Date.UTC(
       Number(values.year),
@@ -58,18 +55,13 @@ function localDateTimeToUtc(
     );
 
     const difference = targetMs - representedMs;
-
     if (difference === 0) break;
-
     guess = new Date(guess.getTime() + difference);
   }
 
   const finalParts = formatter.formatToParts(guess);
   const finalValues: Record<string, string> = {};
-
-  for (const part of finalParts) {
-    finalValues[part.type] = part.value;
-  }
+  for (const part of finalParts) finalValues[part.type] = part.value;
 
   if (
     Number(finalValues.year) !== year ||
@@ -87,8 +79,10 @@ function localDateTimeToUtc(
 }
 
 function NewAppointment() {
-  const { userId, loading: authLoading } = useAuth();
+  const { userId, loading: authLoading, hasRole } = useAuth();
   const navigate = useNavigate();
+
+  const canBook = hasRole("admin") || hasRole("booking_agent");
 
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loadingClients, setLoadingClients] = useState(true);
@@ -120,6 +114,13 @@ function NewAppointment() {
   const [duration, setDuration] = useState("30");
 
   useEffect(() => {
+    if (authLoading || !userId || !canBook) {
+      setLoadingClients(false);
+      return;
+    }
+
+    let cancelled = false;
+
     async function loadClients() {
       setLoadingClients(true);
       setError("");
@@ -129,6 +130,8 @@ function NewAppointment() {
         .select("id, business_name, owner_name, phone, country, timezone")
         .order("business_name", { ascending: true })
         .limit(500);
+
+      if (cancelled) return;
 
       if (fetchError) {
         setError(fetchError.message);
@@ -140,16 +143,17 @@ function NewAppointment() {
     }
 
     void loadClients();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, userId, canBook]);
 
   function chooseClient(id: string) {
     setClientId(id);
-
     const selected = clients.find((client) => client.id === id);
 
-    if (selected) {
-      setTimezone(selected.timezone || timezone);
-    }
+    if (selected?.timezone) setTimezone(selected.timezone);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -159,6 +163,11 @@ function NewAppointment() {
 
     if (!userId) {
       setError("Your login session is missing. Please sign in again.");
+      return;
+    }
+
+    if (!canBook) {
+      setError("You do not have permission to book appointments.");
       return;
     }
 
@@ -180,17 +189,39 @@ function NewAppointment() {
     let scheduledAt: string;
 
     try {
-      scheduledAt = localDateTimeToUtc(
+      const parsedDate = localDateTimeToUtc(
         localDate,
         localTime,
         timezone.trim(),
-      ).toISOString();
+      );
+
+      if (parsedDate.getTime() <= Date.now()) {
+        throw new Error("Please select a future meeting date and time.");
+      }
+
+      scheduledAt = parsedDate.toISOString();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
           : "Please check the selected date, time and timezone.",
       );
+      return;
+    }
+
+    let parsedMeetingUrl: URL;
+
+    try {
+      parsedMeetingUrl = new URL(meetingUrl.trim());
+
+      if (
+        parsedMeetingUrl.protocol !== "https:" &&
+        parsedMeetingUrl.protocol !== "http:"
+      ) {
+        throw new Error();
+      }
+    } catch {
+      setError("Please enter a valid meeting link starting with https:// or http://.");
       return;
     }
 
@@ -228,7 +259,6 @@ function NewAppointment() {
           .single();
 
         if (clientError) throw clientError;
-
         selectedClientId = newClient.id;
       }
 
@@ -242,7 +272,7 @@ function NewAppointment() {
           timezone: timezone.trim(),
           scheduled_at: scheduledAt,
           platform,
-          meeting_url: meetingUrl.trim(),
+          meeting_url: parsedMeetingUrl.toString(),
           duration_minutes: Number(duration),
           status: "scheduled",
           is_demo: false,
@@ -272,8 +302,12 @@ function NewAppointment() {
   if (authLoading) return <Loading />;
 
   if (!userId) {
+    return <ErrorBox error="You must be signed in to book an appointment." />;
+  }
+
+  if (!canBook) {
     return (
-      <ErrorBox message="You must be signed in to book an appointment." />
+      <ErrorBox error="You do not have permission to create appointments. Contact your administrator." />
     );
   }
 
@@ -292,7 +326,7 @@ function NewAppointment() {
         }
       />
 
-      {error && <ErrorBox message={error} />}
+      {error && <ErrorBox error={error} />}
 
       {success && (
         <div className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800">
@@ -335,7 +369,7 @@ function NewAppointment() {
                   id="client"
                   value={clientId}
                   onChange={(event) => chooseClient(event.target.value)}
-                  required={!newClientMode}
+                  required
                   className="w-full rounded-lg border bg-background px-3 py-2.5"
                 >
                   <option value="">Choose a client</option>
@@ -355,44 +389,12 @@ function NewAppointment() {
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label="Business Name *"
-                value={businessName}
-                onChange={setBusinessName}
-                required
-              />
-              <Field
-                label="Owner / Contact Name *"
-                value={ownerName}
-                onChange={setOwnerName}
-                required
-              />
-              <Field
-                label="Phone Number *"
-                value={phone}
-                onChange={setPhone}
-                required
-                inputType="tel"
-              />
-              <Field
-                label="Email"
-                value={email}
-                onChange={setEmail}
-                inputType="email"
-              />
-              <Field
-                label="Country *"
-                value={country}
-                onChange={setCountry}
-                required
-              />
-              <Field
-                label="Client Timezone *"
-                value={clientTimezone}
-                onChange={setClientTimezone}
-                required
-                placeholder="America/New_York"
-              />
+              <Field label="Business Name *" value={businessName} onChange={setBusinessName} required />
+              <Field label="Owner / Contact Name *" value={ownerName} onChange={setOwnerName} required />
+              <Field label="Phone Number *" value={phone} onChange={setPhone} required inputType="tel" />
+              <Field label="Email" value={email} onChange={setEmail} inputType="email" />
+              <Field label="Country *" value={country} onChange={setCountry} required />
+              <Field label="Client Timezone *" value={clientTimezone} onChange={setClientTimezone} required placeholder="America/New_York" />
             </div>
           )}
         </section>
@@ -401,34 +403,12 @@ function NewAppointment() {
           <h2 className="text-lg font-semibold">Meeting Details</h2>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="Meeting Date *"
-              value={localDate}
-              onChange={setLocalDate}
-              required
-              inputType="date"
-            />
-
-            <Field
-              label="Meeting Time *"
-              value={localTime}
-              onChange={setLocalTime}
-              required
-              inputType="time"
-            />
-
-            <Field
-              label="Meeting Timezone *"
-              value={timezone}
-              onChange={setTimezone}
-              required
-              placeholder="America/New_York"
-            />
+            <Field label="Meeting Date *" value={localDate} onChange={setLocalDate} required inputType="date" />
+            <Field label="Meeting Time *" value={localTime} onChange={setLocalTime} required inputType="time" />
+            <Field label="Meeting Timezone *" value={timezone} onChange={setTimezone} required placeholder="America/New_York" />
 
             <div className="space-y-2">
-              <label htmlFor="duration" className="text-sm font-medium">
-                Duration *
-              </label>
+              <label htmlFor="duration" className="text-sm font-medium">Duration *</label>
               <select
                 id="duration"
                 value={duration}
@@ -445,15 +425,11 @@ function NewAppointment() {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="platform" className="text-sm font-medium">
-                Meeting Platform *
-              </label>
+              <label htmlFor="platform" className="text-sm font-medium">Meeting Platform *</label>
               <select
                 id="platform"
                 value={platform}
-                onChange={(event) =>
-                  setPlatform(event.target.value as "zoom" | "google_meet")
-                }
+                onChange={(event) => setPlatform(event.target.value as "zoom" | "google_meet")}
                 required
                 className="w-full rounded-lg border bg-background px-3 py-2.5"
               >
@@ -462,19 +438,11 @@ function NewAppointment() {
               </select>
             </div>
 
-            <Field
-              label="Meeting Link *"
-              value={meetingUrl}
-              onChange={setMeetingUrl}
-              required
-              inputType="url"
-              placeholder="https://..."
-            />
+            <Field label="Meeting Link *" value={meetingUrl} onChange={setMeetingUrl} required inputType="url" placeholder="https://..." />
           </div>
 
           <p className="text-sm text-muted-foreground">
-            Enter the meeting link created in Zoom or Google Meet. This form
-            does not generate meeting links automatically.
+            Enter the meeting link created in Zoom or Google Meet. This form does not generate meeting links automatically.
           </p>
         </section>
 
@@ -532,5 +500,4 @@ function Field({
       />
     </div>
   );
-      }
-  
+                                  }
