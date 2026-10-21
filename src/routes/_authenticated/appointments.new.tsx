@@ -13,6 +13,26 @@ type ClientRow = {
   timezone: string;
 };
 
+const US_TIMEZONES = [
+  { value: "America/New_York", label: "Eastern Time — New York" },
+  { value: "America/Chicago", label: "Central Time — Chicago" },
+  { value: "America/Denver", label: "Mountain Time — Denver" },
+  { value: "America/Los_Angeles", label: "Pacific Time — Los Angeles" },
+  { value: "America/Anchorage", label: "Alaska Time — Anchorage" },
+  { value: "Pacific/Honolulu", label: "Hawaii Time — Honolulu" },
+  { value: "America/Phoenix", label: "Arizona Time — Phoenix" },
+];
+
+const WEBSITE_INTEREST_LEVELS = [
+  "Very Interested",
+  "Interested",
+  "Somewhat Interested",
+  "Not Sure",
+  "Not Interested",
+];
+
+type MeetingPlatform = "zoom" | "google_meet";
+
 export const Route = createFileRoute("/_authenticated/appointments/new")({
   head: () => ({
     meta: [{ title: "New Appointment — DemoDesk CRM" }],
@@ -55,12 +75,15 @@ function localDateTimeToUtc(
     );
 
     const difference = targetMs - representedMs;
+
     if (difference === 0) break;
+
     guess = new Date(guess.getTime() + difference);
   }
 
   const finalParts = formatter.formatToParts(guess);
   const finalValues: Record<string, string> = {};
+
   for (const part of finalParts) finalValues[part.type] = part.value;
 
   if (
@@ -97,20 +120,16 @@ function NewAppointment() {
   const [ownerName, setOwnerName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [country, setCountry] = useState("");
-  const [clientTimezone, setClientTimezone] = useState(
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Karachi",
-  );
+  const [country, setCountry] = useState("United States");
+  const [clientTimezone, setClientTimezone] = useState("America/New_York");
+
+  const [websiteInterestLevel, setWebsiteInterestLevel] = useState("Interested");
+  const [clientNotes, setClientNotes] = useState("");
 
   const [localDate, setLocalDate] = useState("");
   const [localTime, setLocalTime] = useState("");
-  const [timezone, setTimezone] = useState(
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Karachi",
-  );
-  const [platform, setPlatform] = useState<"zoom" | "google_meet">(
-    "google_meet",
-  );
-  const [meetingUrl, setMeetingUrl] = useState("");
+  const [timezone, setTimezone] = useState("America/New_York");
+  const [platform, setPlatform] = useState<MeetingPlatform>("google_meet");
   const [duration, setDuration] = useState("30");
 
   useEffect(() => {
@@ -151,9 +170,21 @@ function NewAppointment() {
 
   function chooseClient(id: string) {
     setClientId(id);
+
     const selected = clients.find((client) => client.id === id);
 
-    if (selected?.timezone) setTimezone(selected.timezone);
+    if (selected?.timezone) {
+      const isSupportedTimezone = US_TIMEZONES.some(
+        (item) => item.value === selected.timezone,
+      );
+
+      const selectedTimezone = isSupportedTimezone
+        ? selected.timezone
+        : "America/New_York";
+
+      setClientTimezone(selectedTimezone);
+      setTimezone(selectedTimezone);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -176,13 +207,13 @@ function NewAppointment() {
       return;
     }
 
-    if (!localDate || !localTime || !timezone.trim()) {
-      setError("Please enter the meeting date, time and timezone.");
+    if (!websiteInterestLevel) {
+      setError("Please select the client's website interest level.");
       return;
     }
 
-    if (!meetingUrl.trim()) {
-      setError("Please enter the Zoom or Google Meet link.");
+    if (!localDate || !localTime || !timezone.trim()) {
+      setError("Please enter the meeting date, time and timezone.");
       return;
     }
 
@@ -206,22 +237,6 @@ function NewAppointment() {
           ? err.message
           : "Please check the selected date, time and timezone.",
       );
-      return;
-    }
-
-    let parsedMeetingUrl: URL;
-
-    try {
-      parsedMeetingUrl = new URL(meetingUrl.trim());
-
-      if (
-        parsedMeetingUrl.protocol !== "https:" &&
-        parsedMeetingUrl.protocol !== "http:"
-      ) {
-        throw new Error();
-      }
-    } catch {
-      setError("Please enter a valid meeting link starting with https:// or http://.");
       return;
     }
 
@@ -259,6 +274,7 @@ function NewAppointment() {
           .single();
 
         if (clientError) throw clientError;
+
         selectedClientId = newClient.id;
       }
 
@@ -272,8 +288,9 @@ function NewAppointment() {
           timezone: timezone.trim(),
           scheduled_at: scheduledAt,
           platform,
-          meeting_url: parsedMeetingUrl.toString(),
           duration_minutes: Number(duration),
+          website_interest_level: websiteInterestLevel,
+          client_notes: clientNotes.trim() || null,
           status: "scheduled",
           is_demo: false,
         })
@@ -389,26 +406,149 @@ function NewAppointment() {
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Business Name *" value={businessName} onChange={setBusinessName} required />
-              <Field label="Owner / Contact Name *" value={ownerName} onChange={setOwnerName} required />
-              <Field label="Phone Number *" value={phone} onChange={setPhone} required inputType="tel" />
-              <Field label="Email" value={email} onChange={setEmail} inputType="email" />
-              <Field label="Country *" value={country} onChange={setCountry} required />
-              <Field label="Client Timezone *" value={clientTimezone} onChange={setClientTimezone} required placeholder="America/New_York" />
+              <Field
+                label="Business Name *"
+                value={businessName}
+                onChange={setBusinessName}
+                required
+              />
+              <Field
+                label="Owner / Contact Name *"
+                value={ownerName}
+                onChange={setOwnerName}
+                required
+              />
+              <Field
+                label="Phone Number *"
+                value={phone}
+                onChange={setPhone}
+                required
+                inputType="tel"
+              />
+              <Field
+                label="Email"
+                value={email}
+                onChange={setEmail}
+                inputType="email"
+              />
+
+              <div className="space-y-2">
+                <label htmlFor="country" className="text-sm font-medium">
+                  Country *
+                </label>
+                <select
+                  id="country"
+                  value={country}
+                  onChange={(event) => setCountry(event.target.value)}
+                  required
+                  className="w-full rounded-lg border bg-background px-3 py-2.5"
+                >
+                  <option value="United States">United States (USA)</option>
+                  <option value="Canada">Canada</option>
+                  <option value="United Kingdom">United Kingdom</option>
+                  <option value="Pakistan">Pakistan</option>
+                  <option value="Australia">Australia</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <TimezoneSelect
+                id="client-timezone"
+                label="Client Time Zone *"
+                value={clientTimezone}
+                onChange={(value) => {
+                  setClientTimezone(value);
+                  setTimezone(value);
+                }}
+                required
+              />
             </div>
           )}
+        </section>
+
+        <section className="space-y-4 rounded-xl border bg-card p-5">
+          <div>
+            <h2 className="text-lg font-semibold">
+              Website Interest & Client Notes
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Record the client's interest in getting a website.
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label
+                htmlFor="website-interest"
+                className="text-sm font-medium"
+              >
+                Website Interest Level *
+              </label>
+              <select
+                id="website-interest"
+                value={websiteInterestLevel}
+                onChange={(event) =>
+                  setWebsiteInterestLevel(event.target.value)
+                }
+                required
+                className="w-full rounded-lg border bg-background px-3 py-2.5"
+              >
+                {WEBSITE_INTEREST_LEVELS.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="client-notes" className="text-sm font-medium">
+              Client Notes
+            </label>
+            <textarea
+              id="client-notes"
+              value={clientNotes}
+              onChange={(event) => setClientNotes(event.target.value)}
+              rows={4}
+              placeholder="Client requirements, budget, objections, existing website details or follow-up notes..."
+              className="w-full rounded-lg border bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
         </section>
 
         <section className="space-y-4 rounded-xl border bg-card p-5">
           <h2 className="text-lg font-semibold">Meeting Details</h2>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Meeting Date *" value={localDate} onChange={setLocalDate} required inputType="date" />
-            <Field label="Meeting Time *" value={localTime} onChange={setLocalTime} required inputType="time" />
-            <Field label="Meeting Timezone *" value={timezone} onChange={setTimezone} required placeholder="America/New_York" />
+            <Field
+              label="Meeting Date *"
+              value={localDate}
+              onChange={setLocalDate}
+              required
+              inputType="date"
+            />
+
+            <Field
+              label="Meeting Time *"
+              value={localTime}
+              onChange={setLocalTime}
+              required
+              inputType="time"
+            />
+
+            <TimezoneSelect
+              id="meeting-timezone"
+              label="Meeting Time Zone *"
+              value={timezone}
+              onChange={setTimezone}
+              required
+            />
 
             <div className="space-y-2">
-              <label htmlFor="duration" className="text-sm font-medium">Duration *</label>
+              <label htmlFor="duration" className="text-sm font-medium">
+                Duration *
+              </label>
               <select
                 id="duration"
                 value={duration}
@@ -425,11 +565,15 @@ function NewAppointment() {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="platform" className="text-sm font-medium">Meeting Platform *</label>
+              <label htmlFor="platform" className="text-sm font-medium">
+                Meeting Platform *
+              </label>
               <select
                 id="platform"
                 value={platform}
-                onChange={(event) => setPlatform(event.target.value as "zoom" | "google_meet")}
+                onChange={(event) =>
+                  setPlatform(event.target.value as MeetingPlatform)
+                }
                 required
                 className="w-full rounded-lg border bg-background px-3 py-2.5"
               >
@@ -437,13 +581,7 @@ function NewAppointment() {
                 <option value="zoom">Zoom</option>
               </select>
             </div>
-
-            <Field label="Meeting Link *" value={meetingUrl} onChange={setMeetingUrl} required inputType="url" placeholder="https://..." />
           </div>
-
-          <p className="text-sm text-muted-foreground">
-            Enter the meeting link created in Zoom or Google Meet. This form does not generate meeting links automatically.
-          </p>
         </section>
 
         <div className="flex flex-wrap gap-3">
@@ -463,6 +601,41 @@ function NewAppointment() {
           </Link>
         </div>
       </form>
+    </div>
+  );
+}
+
+function TimezoneSelect({
+  id,
+  label,
+  value,
+  onChange,
+  required = false,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        className="w-full rounded-lg border bg-background px-3 py-2.5"
+      >
+        {US_TIMEZONES.map((timezoneOption) => (
+          <option key={timezoneOption.value} value={timezoneOption.value}>
+            {timezoneOption.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -500,4 +673,4 @@ function Field({
       />
     </div>
   );
-                                  }
+}
