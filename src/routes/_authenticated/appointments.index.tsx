@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/crm/ui-bits";
 
-export const Route = createFileRoute("/_authenticated/appointments")({
+export const Route = createFileRoute("/_authenticated/appointments/")({
   head: () => ({ meta: [{ title: "Appointments — DemoDesk CRM" }] }),
   component: Appointments,
 });
