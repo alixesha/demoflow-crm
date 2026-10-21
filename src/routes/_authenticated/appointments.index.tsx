@@ -1,43 +1,39 @@
-
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  CalendarDays,
-  ExternalLink,
-  Plus,
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { CalendarPlus, Search, RefreshCw, Eye, CalendarDays } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth";
 import {
-  ErrorBox,
-  Loading,
-  OutcomePill,
+  STATUS_LABEL,
+  OUTCOME_LABEL,
+  type AppointmentStatus,
+} from "@/lib/labels";
+import {
   PageHeader,
+  Loading,
+  ErrorBox,
+  EmptyState,
   StatusPill,
-  Pill,
+  OutcomePill,
 } from "@/components/crm/ui-bits";
-import type { AppointmentStatus, DemoOutcome } from "@/lib/labels";
-
-export const Route = createFileRoute("/_authenticated/appointments/")({
-  head: () => ({
-    meta: [{ title: "Appointments — DemoDesk CRM" }],
-  }),
-  component: Appointments,
-});
 
 type AppointmentRow = {
   id: string;
-  scheduled_at: string;
+  client_id: string;
+  booking_agent_id: string;
+  demo_staff_id: string | null;
   local_date: string;
   local_time: string;
   timezone: string;
-  status: AppointmentStatus;
-  outcome: DemoOutcome | null;
-  platform: "zoom" | "google_meet";
   duration_minutes: number;
+  platform: "zoom" | "google_meet";
+  meeting_url: string;
+  status: AppointmentStatus;
+  outcome: "interested" | "follow_up_required" | "not_interested" | "sold" | "lost" | null;
+  sale_amount: number | null;
+  follow_up_date: string | null;
   is_demo: boolean;
   clients: {
     business_name: string;
@@ -47,60 +43,85 @@ type AppointmentRow = {
   } | null;
 };
 
-const statusOptions = [
-  { value: "all", label: "All statuses" },
-  { value: "scheduled", label: "Scheduled" },
-  { value: "rescheduled", label: "Rescheduled" },
-  { value: "completed", label: "Completed" },
-  { value: "cancelled", label: "Cancelled" },
-  { value: "no_show", label: "No show" },
-];
+export const Route = createFileRoute("/_authenticated/appointments/")({
+  head: () => ({
+    meta: [{ title: "Appointments — DemoDesk CRM" }],
+  }),
+  component: Appointments,
+});
 
 function Appointments() {
-  const [appointments, setAppointments] = useState<AppointmentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { userId, hasRole } = useAuth();
+
+  const canCreateAppointment =
+    hasRole("admin") || hasRole("booking_agent");
+
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
-  const [dateRange, setDateRange] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("all");
 
-  const loadAppointments = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const { data, error: queryError } = await supabase
+  const {
+    data: appointments = [],
+    isLoading,
+    error,
+    refetch,
+    isFetching,
+  } = useQuery({
+    queryKey: ["appointments-list", userId, hasRole("admin"), hasRole("demo_staff")],
+    enabled: !!userId,
+    queryFn: async () => {
+      let query = supabase
         .from("appointments")
-        .select(
-          "id, scheduled_at, local_date, local_time, timezone, status, outcome, platform, duration_minutes, is_demo, clients(business_name, owner_name, phone, country)",
-        )
+        .select(`
+          id,
+          client_id,
+          booking_agent_id,
+          demo_staff_id,
+          local_date,
+          local_time,
+          timezone,
+          duration_minutes,
+          platform,
+          meeting_url,
+          status,
+          outcome,
+          sale_amount,
+          follow_up_date,
+          is_demo,
+          clients (
+            business_name,
+            owner_name,
+            phone,
+            country
+          )
+        `)
         .order("scheduled_at", { ascending: false })
         .limit(500);
 
-      if (queryError) throw queryError;
+      // Booking agents should only request their own appointments.
+      // Supabase RLS must also enforce this restriction.
+      if (
+        !hasRole("admin") &&
+        !hasRole("demo_staff") &&
+        userId
+      ) {
+        query = query.eq("booking_agent_id", userId);
+      }
 
-      setAppointments((data ?? []) as unknown as AppointmentRow[]);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Appointments could not be loaded.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      const { data, error } = await query;
 
-  useEffect(() => {
-    void loadAppointments();
-  }, [loadAppointments]);
+      if (error) throw error;
+
+      return (data ?? []) as unknown as AppointmentRow[];
+    },
+  });
 
   const filteredAppointments = useMemo(() => {
     const term = search.trim().toLowerCase();
-    const now = Date.now();
 
     return appointments.filter((appointment) => {
       const client = appointment.clients;
+
       const matchesSearch =
         !term ||
         client?.business_name?.toLowerCase().includes(term) ||
@@ -109,246 +130,216 @@ function Appointments() {
         appointment.id.toLowerCase().includes(term);
 
       const matchesStatus =
-        status === "all" || appointment.status === status;
+        statusFilter === "all" || appointment.status === statusFilter;
 
-      const scheduledTime = new Date(appointment.scheduled_at).getTime();
+      const today = new Date().toLocaleDateString("en-CA", {
+        timeZone: appointment.timezone || "UTC",
+      });
 
       const matchesDate =
-        dateRange === "all" ||
-        (dateRange === "upcoming" &&
-          scheduledTime >= now &&
+        dateFilter === "all" ||
+        (dateFilter === "today" && appointment.local_date === today) ||
+        (dateFilter === "upcoming" &&
+          appointment.local_date >= today &&
           ["scheduled", "rescheduled"].includes(appointment.status)) ||
-        (dateRange === "past" && scheduledTime < now) ||
-        (dateRange === "today" &&
-          appointment.local_date ===
-            new Intl.DateTimeFormat("en-CA", {
-              timeZone: appointment.timezone || "UTC",
-            }).format(new Date()));
+        (dateFilter === "past" && appointment.local_date < today);
 
       return matchesSearch && matchesStatus && matchesDate;
     });
-  }, [appointments, search, status, dateRange]);
+  }, [appointments, search, statusFilter, dateFilter]);
+
+  if (isLoading) return <Loading label="Loading appointments..." />;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Appointments"
-        subtitle="Manage bookings, track demo progress and find client appointments."
+        subtitle="View and manage website demo bookings."
         actions={
-          <>
+          <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => void loadAppointments()}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
             >
               <RefreshCw
-                className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
+                className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
               />
               Refresh
             </button>
 
-            <Link
-              to="/appointments/new"
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
-            >
-              <Plus className="h-4 w-4" />
-              New Appointment
-            </Link>
-          </>
+            {canCreateAppointment && (
+              <Link
+                to="/appointments/new"
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+              >
+                <CalendarPlus className="h-4 w-4" />
+                New Appointment
+              </Link>
+            )}
+          </div>
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      {error && <ErrorBox error={error} />}
+
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="surface p-4">
-          <p className="text-sm text-muted-foreground">Loaded appointments</p>
-          <p className="mt-2 font-display text-2xl font-semibold">
-            {loading ? "—" : appointments.length}
+          <p className="text-sm text-muted-foreground">Total loaded</p>
+          <p className="mt-1 text-2xl font-semibold">{appointments.length}</p>
+        </div>
+
+        <div className="surface p-4">
+          <p className="text-sm text-muted-foreground">Scheduled</p>
+          <p className="mt-1 text-2xl font-semibold">
+            {appointments.filter((a) =>
+              ["scheduled", "rescheduled"].includes(a.status),
+            ).length}
           </p>
         </div>
+
         <div className="surface p-4">
-          <p className="text-sm text-muted-foreground">Matching results</p>
-          <p className="mt-2 font-display text-2xl font-semibold">
-            {loading ? "—" : filteredAppointments.length}
-          </p>
-        </div>
-        <div className="surface p-4">
-          <p className="text-sm text-muted-foreground">Demo records</p>
-          <p className="mt-2 font-display text-2xl font-semibold">
-            {loading
-              ? "—"
-              : appointments.filter((appointment) => appointment.is_demo)
-                  .length}
+          <p className="text-sm text-muted-foreground">Completed</p>
+          <p className="mt-1 text-2xl font-semibold">
+            {appointments.filter((a) => a.status === "completed").length}
           </p>
         </div>
       </div>
 
-      <section className="surface space-y-4 p-4 sm:p-5">
-        <div className="flex items-center gap-2">
-          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-          <h2 className="font-semibold">Search and filters</h2>
-        </div>
-
+      <div className="surface space-y-4 p-4">
         <div className="grid gap-3 md:grid-cols-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search business, contact or phone..."
-              aria-label="Search appointments"
-              className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+              placeholder="Search client, phone or appointment ID..."
+              className="w-full rounded-lg border bg-background py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
 
           <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-            aria-label="Filter by status"
-            className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className="rounded-lg border bg-background px-3 py-2.5 text-sm"
           >
-            {statusOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
+            <option value="all">All statuses</option>
+            {Object.entries(STATUS_LABEL).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
               </option>
             ))}
           </select>
 
           <select
-            value={dateRange}
-            onChange={(event) => setDateRange(event.target.value)}
-            aria-label="Filter by date"
-            className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            value={dateFilter}
+            onChange={(event) => setDateFilter(event.target.value)}
+            className="rounded-lg border bg-background px-3 py-2.5 text-sm"
           >
             <option value="all">All dates</option>
-            <option value="today">Today (client timezone)</option>
-            <option value="upcoming">Upcoming demos</option>
-            <option value="past">Past appointments</option>
+            <option value="today">Today</option>
+            <option value="upcoming">Upcoming scheduled</option>
+            <option value="past">Past dates</option>
           </select>
         </div>
 
-        {(search || status !== "all" || dateRange !== "all") && (
-          <button
-            onClick={() => {
-              setSearch("");
-              setStatus("all");
-              setDateRange("all");
-            }}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            Clear all filters
-          </button>
-        )}
-      </section>
+        <p className="text-sm text-muted-foreground">
+          Showing {filteredAppointments.length} of {appointments.length} loaded
+          appointments.
+        </p>
+      </div>
 
-      {error && <ErrorBox error={error} />}
-
-      {loading ? (
+      {filteredAppointments.length === 0 ? (
         <div className="surface">
-          <Loading label="Loading appointments..." />
-        </div>
-      ) : !error && filteredAppointments.length === 0 ? (
-        <div className="surface px-6 py-14 text-center">
-          <CalendarDays className="mx-auto h-10 w-10 text-muted-foreground/60" />
-          <h2 className="mt-3 font-display text-lg font-semibold">
-            {appointments.length === 0
-              ? "No appointments yet"
-              : "No matching appointments"}
-          </h2>
-          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-            {appointments.length === 0
-              ? "Create your first appointment to start organizing website demos."
-              : "Try changing your search or filters to see more results."}
-          </p>
-          {appointments.length === 0 && (
-            <Link
-              to="/appointments/new"
-              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-            >
-              <Plus className="h-4 w-4" />
-              Create appointment
-            </Link>
-          )}
+          <EmptyState
+            icon={CalendarDays}
+            title="No appointments found"
+            text={
+              appointments.length === 0
+                ? "No appointments are available for your account yet."
+                : "Try changing the search or filters."
+            }
+            action={
+              canCreateAppointment ? (
+                <Link
+                  to="/appointments/new"
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                >
+                  <CalendarPlus className="h-4 w-4" />
+                  Book an appointment
+                </Link>
+              ) : undefined
+            }
+          />
         </div>
       ) : (
-        <section className="surface overflow-hidden">
-          <div className="flex items-center justify-between gap-3 border-b border-border p-4 sm:p-5">
-            <div>
-              <h2 className="font-display text-lg font-semibold">
-                Appointment records
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Showing matching records from the latest 500 loaded.
-              </p>
-            </div>
-            <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium">
-              {filteredAppointments.length} results
-            </span>
-          </div>
+        <div className="space-y-3">
+          {filteredAppointments.map((appointment) => {
+            const client = appointment.clients;
 
-          <div className="divide-y divide-border">
-            {filteredAppointments.map((appointment) => (
-              <article
+            return (
+              <div
                 key={appointment.id}
-                className="flex flex-col gap-4 p-4 transition-colors hover:bg-muted/20 sm:p-5 lg:flex-row lg:items-center lg:justify-between"
+                className="surface flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between"
               >
-                <div className="flex min-w-0 gap-3">
-                  <div className="mt-1 rounded-xl bg-primary/10 p-3">
-                    <CalendarDays className="h-5 w-5 text-primary" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="font-semibold">
+                      {client?.business_name || "Unknown client"}
+                    </h2>
+                    <StatusPill status={appointment.status} />
+                    <OutcomePill outcome={appointment.outcome} />
                   </div>
 
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate font-semibold">
-                        {appointment.clients?.business_name ||
-                          "Unnamed client"}
-                      </h3>
-                      {appointment.is_demo && (
-                        <Pill tone="muted">Demo record</Pill>
-                      )}
-                    </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {client?.owner_name || "No contact name"}
+                    {client?.phone ? ` · ${client.phone}` : ""}
+                    {client?.country ? ` · ${client.country}` : ""}
+                  </p>
 
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {appointment.clients?.owner_name || "No contact name"}
-                      {appointment.clients?.phone
-                        ? ` · ${appointment.clients.phone}`
-                        : ""}
-                    </p>
-
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span>
-                        {appointment.local_date} at {appointment.local_time}
-                      </span>
-                      <span>
-                        {appointment.duration_minutes} min
-                      </span>
-                      <span>
-                        {appointment.platform === "google_meet"
-                          ? "Google Meet"
-                          : "Zoom"}
-                      </span>
-                    </div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                    <span>
+                      {appointment.local_date} at {appointment.local_time}
+                    </span>
+                    <span>{appointment.duration_minutes} minutes</span>
+                    <span>
+                      {appointment.platform === "google_meet"
+                        ? "Google Meet"
+                        : "Zoom"}
+                    </span>
+                    {appointment.follow_up_date && (
+                      <span>Follow-up: {appointment.follow_up_date}</span>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                  <StatusPill status={appointment.status} />
-                  <OutcomePill outcome={appointment.outcome} />
-
+                <div className="flex flex-wrap items-center gap-2">
                   <Link
                     to="/appointments/$id"
                     params={{ id: appointment.id }}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
+                    className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted"
                   >
-                    View details
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    <Eye className="h-4 w-4" />
+                    View Details
                   </Link>
+
+                  {appointment.meeting_url && (
+                    <a
+                      href={appointment.meeting_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+                    >
+                      Join Meeting
+                    </a>
+                  )}
                 </div>
-              </article>
-            ))}
-          </div>
-        </section>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
-        }
-                
+                }
