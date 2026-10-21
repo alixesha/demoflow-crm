@@ -54,7 +54,7 @@ function AuthPage() {
         return;
       }
       const parsed = schema.safeParse(form);
-      if (!parsed.success) throw new Error(parsed.error.issues[0].message);
+      if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid input");
       if (mode === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
         if (error) throw error;
