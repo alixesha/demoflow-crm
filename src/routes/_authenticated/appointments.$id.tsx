@@ -352,7 +352,7 @@ function AppointmentDetails() {
   if (!appointment) {
     return (
       <div className="space-y-4">
-        <ErrorBox message={error || "Appointment not found."} />
+        <ErrorBox error={new Error(error || "Appointment not found.")} />
         <Link to="/appointments/" className="underline">
           Back to Appointments
         </Link>
@@ -377,7 +377,7 @@ function AppointmentDetails() {
         }
       />
 
-      {error && <ErrorBox message={error} />}
+      {error && <ErrorBox error={new Error(error)} />}
 
       {message && (
         <div className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800">
@@ -637,4 +637,105 @@ function AppointmentDetails() {
                   <Detail
                     label="Requested Changes"
                     value={remark.requested_changes}
-      
+                  />
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>{new Date(remark.created_at).toLocaleString()}</span>
+                  {remark.outcome_at_time && (
+                    <OutcomePill outcome={remark.outcome_at_time} />
+                  )}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Detail({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div>
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="whitespace-pre-wrap break-words text-sm font-medium">
+        {value || "—"}
+      </p>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  required = false,
+  type = "text",
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  type?: string;
+  placeholder?: string;
+}) {
+  const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+  return (
+    <div className="space-y-2">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+      <input
+        id={id}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        placeholder={placeholder}
+        className="w-full rounded-lg border bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-primary"
+      />
+    </div>
+  );
+}
+
+function TextAreaField({
+  label,
+  value,
+  onChange,
+  required = false,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  placeholder?: string;
+}) {
+  const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+  return (
+    <div className="space-y-2">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+      <textarea
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        placeholder={placeholder}
+        rows={3}
+        className="w-full rounded-lg border bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-primary"
+      />
+    </div>
+  );
+}
