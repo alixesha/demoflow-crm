@@ -82,7 +82,7 @@ function Shell() {
           <SidebarHeader>
             <div className="flex items-center gap-2 px-2 py-3 font-display text-base font-semibold text-sidebar-accent-foreground">
               <CalendarCheck2 className="h-5 w-5 shrink-0 text-sidebar-primary" />
-              <span className="group-data-[collapsible=icon]:hidden">DemoDesk</span>
+              <span className="group-data-[collapsible=icon]:hidden">Team CUL CRM</span>
             </div>
           </SidebarHeader>
           <SidebarContent>
