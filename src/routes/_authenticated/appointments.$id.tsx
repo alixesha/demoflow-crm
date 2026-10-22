@@ -105,7 +105,7 @@ function AppointmentDetails() {
   const canRecordOutcome =
     hasRole("admin") || hasRole("demo_staff");
   const canEditBooking =
-    hasRole("admin") || hasRole("booking_agent");
+    hasRole("admin");
   const canManageAssignments = hasRole("admin");
 
   const loadData = useCallback(async () => {
