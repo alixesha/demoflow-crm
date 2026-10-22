@@ -26,7 +26,7 @@ import {
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
-    meta: [{ title: "Dashboard — DemoDesk CRM" }],
+    meta: [{ title: "Dashboard — Team CUL CRM" }],
   }),
   component: Dashboard,
 });
@@ -207,7 +207,7 @@ function Dashboard() {
             <Activity className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <p className="text-sm font-semibold">DemoDesk CRM</p>
+            <p className="text-sm font-semibold">Team CUL CRM</p>
             <p className="text-xs text-muted-foreground">
               Appointment workspace
             </p>
