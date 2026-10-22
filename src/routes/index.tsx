@@ -1,3 +1,4 @@
+
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
@@ -6,9 +7,9 @@ import { useAuth } from "@/lib/auth";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "DemoDesk CRM — Website Demo Appointments" },
+      { title: "Team CUL CRM — Website Demo Appointments" },
       { name: "description", content: "Secure appointment CRM for call-centre website demos." },
-      { property: "og:title", content: "DemoDesk CRM" },
+      { property: "og:title", content: "Team CUL CRM" },
       { property: "og:description", content: "Secure appointment CRM for call-centre website demos." },
     ],
   }),
