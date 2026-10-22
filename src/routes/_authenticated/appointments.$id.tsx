@@ -580,7 +580,7 @@ function AppointmentDetails() {
           </button>
         )}
       </form>
-
+{hasRole("admin") && (
       <section className="space-y-4 rounded-xl border bg-card p-5">
         <div>
           <h2 className="text-lg font-semibold">Remarks & Activity Notes</h2>
@@ -650,7 +650,7 @@ function AppointmentDetails() {
             ))
           )}
         </div>
-      </section>
+      </section> )}
     </div>
   );
 }
