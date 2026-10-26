@@ -9,7 +9,8 @@ import {
   Clock3,
   RefreshCw,
   TrendingUp,
-  Users,
+  Trophy,
+  Medal,
 } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -46,25 +47,60 @@ type RecentAppointment = {
   } | null;
 };
 
-type TeamAppointment = {
+type LeaderboardAppointment = {
   booking_agent_id: string | null;
-  status: string | null;
+  created_at: string;
   outcome: string | null;
   sale_amount: number | null;
-  scheduled_at: string | null;
-  follow_up_date: string | null;
   is_demo: boolean | null;
 };
 
-type TeamAgent = {
+type LeaderboardAgent = {
   user_id: string;
   full_name: string;
-  total: number;
-  upcoming: number;
-  followUps: number;
   sales: number;
   salesAmount: number;
 };
+
+type DateFilter = "today" | "week" | "month" | "all";
+
+function getDateRange(filter: DateFilter) {
+  if (filter === "all") {
+    return null;
+  }
+
+  const now = new Date();
+  const start = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  if (filter === "week") {
+    const day = start.getDay();
+    const daysSinceMonday = (day + 6) % 7;
+    start.setDate(start.getDate() - daysSinceMonday);
+  }
+
+  if (filter === "month") {
+    start.setDate(1);
+  }
+
+  const end = new Date(start);
+
+  if (filter === "today") {
+    end.setDate(end.getDate() + 1);
+  } else if (filter === "week") {
+    end.setDate(end.getDate() + 7);
+  } else {
+    end.setMonth(end.getMonth() + 1);
+  }
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
 
 function Dashboard() {
   const { profile, hasRole } = useAuth();
@@ -74,21 +110,38 @@ function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
   const [total, setTotal] = useState(0);
   const [upcoming, setUpcoming] = useState(0);
   const [followUps, setFollowUps] = useState(0);
   const [sales, setSales] = useState(0);
   const [salesAmount, setSalesAmount] = useState(0);
   const [recent, setRecent] = useState<RecentAppointment[]>([]);
-  const [teamAgents, setTeamAgents] = useState<TeamAgent[]>([]);
+
+  const [leaderboard, setLeaderboard] = useState<LeaderboardAgent[]>([]);
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+
+      if (sessionError) throw sessionError;
+
+      const userId = sessionData.session?.user.id;
+
+      if (!userId) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      setCurrentUserId(userId);
+
       const now = new Date().toISOString();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = new Date().toLocaleDateString("en-CA");
 
       let baseQuery = supabase
         .from("appointments")
@@ -126,28 +179,11 @@ function Dashboard() {
         .limit(6);
 
       if (!canSeeTeam) {
-        const { data: sessionData, error: sessionError } =
-          await supabase.auth.getSession();
-
-        if (sessionError) throw sessionError;
-
-        const currentUserId = sessionData.session?.user.id;
-
-        if (!currentUserId) {
-          throw new Error("Your session has expired. Please sign in again.");
-        }
-
-        baseQuery = baseQuery.eq("booking_agent_id", currentUserId);
-        upcomingQuery = upcomingQuery.eq(
-          "booking_agent_id",
-          currentUserId
-        );
-        followUpQuery = followUpQuery.eq(
-          "booking_agent_id",
-          currentUserId
-        );
-        salesQuery = salesQuery.eq("booking_agent_id", currentUserId);
-        recentQuery = recentQuery.eq("booking_agent_id", currentUserId);
+        baseQuery = baseQuery.eq("booking_agent_id", userId);
+        upcomingQuery = upcomingQuery.eq("booking_agent_id", userId);
+        followUpQuery = followUpQuery.eq("booking_agent_id", userId);
+        salesQuery = salesQuery.eq("booking_agent_id", userId);
+        recentQuery = recentQuery.eq("booking_agent_id", userId);
       }
 
       const [
@@ -190,102 +226,106 @@ function Dashboard() {
         (recentResult.data ?? []) as unknown as RecentAppointment[]
       );
 
-      // Admin aur Demo Staff ke liye har booking agent ki performance.
+      // Load leaderboard records. Booking agents only request their own data.
+      const range = getDateRange(dateFilter);
+
+      let leaderboardQuery = supabase
+        .from("appointments")
+        .select(
+          "booking_agent_id, created_at, outcome, sale_amount, is_demo"
+        )
+        .eq("is_demo", false)
+        .eq("outcome", "sold");
+
+      if (!canSeeTeam) {
+        leaderboardQuery = leaderboardQuery.eq(
+          "booking_agent_id",
+          userId
+        );
+      }
+
+      if (range) {
+        leaderboardQuery = leaderboardQuery
+          .gte("created_at", range.start)
+          .lt("created_at", range.end);
+      }
+
+      const leaderboardResult = await leaderboardQuery;
+
+      if (leaderboardResult.error) {
+        throw leaderboardResult.error;
+      }
+
+      const soldAppointments =
+        (leaderboardResult.data ?? []) as LeaderboardAppointment[];
+
+      let agents: { user_id: string; full_name: string }[] = [];
+
       if (canSeeTeam) {
-        const [rolesResult, profilesResult, appointmentsResult] =
-          await Promise.all([
-            supabase
-              .from("user_roles")
-              .select("user_id, role")
-              .eq("role", "booking_agent"),
+        const [rolesResult, profilesResult] = await Promise.all([
+          supabase
+            .from("user_roles")
+            .select("user_id, role")
+            .eq("role", "booking_agent"),
 
-            supabase
-              .from("profiles")
-              .select("id, full_name"),
+          supabase
+            .from("profiles")
+            .select("id, full_name"),
+        ]);
 
-            supabase
-              .from("appointments")
-              .select(
-                "booking_agent_id, status, outcome, sale_amount, scheduled_at, follow_up_date, is_demo"
-              )
-              .eq("is_demo", false),
-          ]);
+        if (rolesResult.error) throw rolesResult.error;
+        if (profilesResult.error) throw profilesResult.error;
 
-        const teamError =
-          rolesResult.error ||
-          profilesResult.error ||
-          appointmentsResult.error;
-
-        if (teamError) throw teamError;
-
-        const agentIds = [
-          ...new Set(
-            (rolesResult.data ?? []).map((row) => row.user_id)
-          ),
-        ];
-
-        const profileNames = new Map(
+        const names = new Map(
           (profilesResult.data ?? []).map((row) => [
             row.id,
             row.full_name,
           ])
         );
 
-        const appointmentRows =
-          (appointmentsResult.data ?? []) as TeamAppointment[];
-
-        const agentStats: TeamAgent[] = agentIds.map((userId) => {
-          const agentAppointments = appointmentRows.filter(
-            (appointment) =>
-              appointment.booking_agent_id === userId
-          );
-
-          const agentUpcoming = agentAppointments.filter(
-            (appointment) =>
-              ["scheduled", "rescheduled"].includes(
-                appointment.status ?? ""
-              ) &&
-              !!appointment.scheduled_at &&
-              appointment.scheduled_at >= now
-          ).length;
-
-          const agentFollowUps = agentAppointments.filter(
-            (appointment) =>
-              appointment.outcome === "follow_up_required" &&
-              !!appointment.follow_up_date &&
-              appointment.follow_up_date <= today
-          ).length;
-
-          const soldAppointments = agentAppointments.filter(
-            (appointment) => appointment.outcome === "sold"
-          );
-
-          return {
+        agents = [
+          ...new Set(
+            (rolesResult.data ?? []).map((row) => row.user_id)
+          ),
+        ].map((id) => ({
+          user_id: id,
+          full_name: names.get(id) || "Unnamed Agent",
+        }));
+      } else {
+        agents = [
+          {
             user_id: userId,
-            full_name: profileNames.get(userId) || "Unnamed Agent",
-            total: agentAppointments.length,
-            upcoming: agentUpcoming,
-            followUps: agentFollowUps,
-            sales: soldAppointments.length,
-            salesAmount: soldAppointments.reduce(
-              (sum, appointment) =>
-                sum + Number(appointment.sale_amount ?? 0),
-              0
-            ),
-          };
-        });
+            full_name: profile?.full_name || "My Performance",
+          },
+        ];
+      }
 
-        agentStats.sort(
-          (a, b) =>
-            b.sales - a.sales ||
-            b.total - a.total ||
-            a.full_name.localeCompare(b.full_name)
+      const rows: LeaderboardAgent[] = agents.map((agent) => {
+        const agentSales = soldAppointments.filter(
+          (appointment) =>
+            appointment.booking_agent_id === agent.user_id
         );
 
-        setTeamAgents(agentStats);
-      } else {
-        setTeamAgents([]);
-      }
+        return {
+          user_id: agent.user_id,
+          full_name: agent.full_name,
+          sales: agentSales.length,
+          salesAmount: agentSales.reduce(
+            (sum, appointment) =>
+              sum + Number(appointment.sale_amount ?? 0),
+            0
+          ),
+        };
+      });
+
+      rows.sort(
+        (a, b) =>
+          b.sales - a.sales ||
+          b.salesAmount - a.salesAmount ||
+          a.full_name.localeCompare(b.full_name)
+      );
+
+      setLeaderboard(rows);
     } catch (err) {
       setError(
         err instanceof Error
@@ -295,11 +335,18 @@ function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [canSeeTeam]);
+  }, [canSeeTeam, dateFilter, profile?.full_name]);
 
   useEffect(() => {
     void loadDashboard();
   }, [loadDashboard]);
+
+  const filterOptions: { value: DateFilter; label: string }[] = [
+    { value: "today", label: "Today" },
+    { value: "week", label: "This Week" },
+    { value: "month", label: "This Month" },
+    { value: "all", label: "All Time" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -402,52 +449,144 @@ function Dashboard() {
         )}
       </section>
 
+      <section className="surface overflow-hidden">
+        <div className="flex flex-col gap-4 border-b border-border p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-yellow-500" />
+              <h2 className="font-display text-lg font-semibold">
+                Sales Leaderboard
+              </h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Ranked by number of closed sales.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {filterOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setDateFilter(option.value)}
+                className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                  dateFilter === option.value
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-background hover:bg-accent"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {loading ? (
+          <Loading label="Loading sales leaderboard..." />
+        ) : leaderboard.length === 0 ? (
+          <div className="px-6 py-12 text-center">
+            <Trophy className="mx-auto h-9 w-9 text-muted-foreground/60" />
+            <h3 className="mt-3 font-semibold">No sales to rank yet</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Closed sales for this period will appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {leaderboard.map((agent, index) => (
+              <div
+                key={agent.user_id}
+                className={`flex flex-col gap-3 p-5 transition-colors sm:flex-row sm:items-center sm:justify-between ${
+                  index === 0 ? "bg-yellow-500/5" : ""
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div
+                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+                      index === 0
+                        ? "bg-yellow-500/15 text-yellow-600"
+                        : index === 1
+                          ? "bg-slate-400/15 text-slate-500"
+                          : index === 2
+                            ? "bg-orange-600/10 text-orange-600"
+                            : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {index < 3 ? (
+                      <Medal className="h-5 w-5" />
+                    ) : (
+                      <span className="font-semibold">{index + 1}</span>
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">
+                      {agent.full_name}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {index === 0 && agent.sales > 0
+                        ? "Top Sales Agent"
+                        : `Rank #${index + 1}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-6 sm:gap-10">
+                  <div className="text-right">
+                    <p className="text-xs text-muted-foreground">
+                      Closed Sales
+                    </p>
+                    <p className="mt-1 text-xl font-bold tabular-nums">
+                      {agent.sales.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-muted-foreground">
+                      Sales Amount
+                    </p>
+                    <p className="mt-1 text-xl font-bold tabular-nums">
+                      {agent.salesAmount.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
+          {dateFilter === "all"
+            ? "All-time results."
+            : `Filtered by ${filterOptions.find((item) => item.value === dateFilter)?.label.toLowerCase()}.`}{" "}
+          Date range uses appointment creation date. Demo records are excluded.
+        </div>
+      </section>
+
       {canSeeTeam && (
         <section className="surface overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
-            <div>
-              <h2 className="font-display text-lg font-semibold">
-                Agent-wise Performance
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Individual booking results for every booking agent.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-medium text-primary">
-              <Users className="h-4 w-4" />
-              {teamAgents.length} agents
-            </div>
+          <div className="border-b border-border p-5">
+            <h2 className="font-display text-lg font-semibold">
+              Agent-wise Performance
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Overall appointment performance for every booking agent.
+            </p>
           </div>
 
           {loading ? (
             <Loading label="Loading agent performance..." />
-          ) : teamAgents.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <Users className="mx-auto h-9 w-9 text-muted-foreground/60" />
-              <h3 className="mt-3 font-semibold">
-                No booking agents found
-              </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Users assigned the booking_agent role will appear here.
-              </p>
+          ) : leaderboard.length === 0 ? (
+            <div className="px-6 py-10 text-center text-sm text-muted-foreground">
+              No booking agents found.
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-sm">
+              <table className="w-full min-w-[600px] text-left text-sm">
                 <thead className="bg-muted/40 text-muted-foreground">
                   <tr>
-                    <th className="px-5 py-3 font-medium">Booking Agent</th>
-                    <th className="px-4 py-3 text-right font-medium">
-                      Total
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium">
-                      Upcoming
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium">
-                      Follow-ups
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium">
-                      Sales
+                    <th className="px-5 py-3 font-medium">Agent</th>
+                    <th className="px-5 py-3 text-right font-medium">
+                      Closed Sales
                     </th>
                     <th className="px-5 py-3 text-right font-medium">
                       Sales Amount
@@ -455,32 +594,15 @@ function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {teamAgents.map((agent) => (
-                    <tr
-                      key={agent.user_id}
-                      className="transition-colors hover:bg-muted/30"
-                    >
-                      <td className="px-5 py-4">
-                        <div className="font-medium">
-                          {agent.full_name}
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Booking Agent
-                        </div>
+                  {leaderboard.map((agent) => (
+                    <tr key={agent.user_id}>
+                      <td className="px-5 py-4 font-medium">
+                        {agent.full_name}
                       </td>
-                      <td className="px-4 py-4 text-right tabular-nums">
-                        {agent.total}
-                      </td>
-                      <td className="px-4 py-4 text-right tabular-nums">
-                        {agent.upcoming}
-                      </td>
-                      <td className="px-4 py-4 text-right tabular-nums">
-                        {agent.followUps}
-                      </td>
-                      <td className="px-4 py-4 text-right font-semibold tabular-nums">
+                      <td className="px-5 py-4 text-right tabular-nums">
                         {agent.sales}
                       </td>
-                      <td className="px-5 py-4 text-right font-semibold tabular-nums">
+                      <td className="px-5 py-4 text-right tabular-nums">
                         {agent.salesAmount.toLocaleString()}
                       </td>
                     </tr>
@@ -489,10 +611,6 @@ function Dashboard() {
               </table>
             </div>
           )}
-
-          <div className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
-            Sales are sorted highest first. Demo records are excluded.
-          </div>
         </section>
       )}
 
@@ -511,8 +629,7 @@ function Dashboard() {
             Database connected
           </div>
         </div>
-
-        {loading ? (
+{loading ? (
           <Loading label="Loading recent appointments..." />
         ) : recent.length === 0 ? (
           <div className="px-6 py-14 text-center">
@@ -578,4 +695,5 @@ function Dashboard() {
       </p>
     </div>
   );
-                }
+}
+        
