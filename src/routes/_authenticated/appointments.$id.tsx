@@ -692,6 +692,56 @@ window.location.href = "/appointments/";
           )}
         </div>
       </section> )}
+           {deleteDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-dialog-title"
+            className="w-full max-w-md space-y-5 rounded-2xl border bg-card p-6 shadow-2xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+                <Trash2 className="h-5 w-5" />
+              </div>
+
+              <div className="space-y-1">
+                <h2
+                  id="delete-dialog-title"
+                  className="text-lg font-semibold"
+                >
+                  Delete Appointment?
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Are you sure you want to delete this appointment? This
+                  action cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={saving}
+                className="rounded-lg border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void deleteAppointment()}
+                disabled={saving}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {saving ? "Deleting..." : "Delete Appointment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -778,56 +828,7 @@ function TextAreaField({
         className="w-full rounded-lg border bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-primary"
       />
       
-      {deleteDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="delete-dialog-title"
-            className="w-full max-w-md space-y-5 rounded-2xl border bg-card p-6 shadow-2xl"
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
-                <Trash2 className="h-5 w-5" />
-              </div>
-
-              <div className="space-y-1">
-                <h2
-                  id="delete-dialog-title"
-                  className="text-lg font-semibold"
-                >
-                  Delete Appointment?
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Are you sure you want to delete this appointment? This
-                  action cannot be undone.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setDeleteDialogOpen(false)}
-                disabled={saving}
-                className="rounded-lg border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void deleteAppointment()}
-                disabled={saving}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
-              >
-                <Trash2 className="h-4 w-4" />
-                {saving ? "Deleting..." : "Delete Appointment"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+ 
       
     </div>
   );
