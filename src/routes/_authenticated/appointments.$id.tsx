@@ -1,4 +1,3 @@
-
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
@@ -24,7 +23,7 @@ type Appointment = {
   timezone: string;
   scheduled_at: string;
   duration_minutes: number;
-  meeting_url: string;
+  meeting_url: string | null;
   platform: "zoom" | "google_meet";
   status: AppointmentStatus;
   outcome: DemoOutcome | null;
@@ -76,6 +75,12 @@ const outcomes: DemoOutcome[] = [
   "lost",
 ];
 
+const timezones = [
+  { value: "America/Los_Angeles", label: "Pacific Time" },
+  { value: "America/Chicago", label: "Central Time" },
+  { value: "America/New_York", label: "Eastern Time" },
+];
+
 function AppointmentDetails() {
   const { id } = Route.useParams();
   const { userId, hasRole } = useAuth();
@@ -93,13 +98,11 @@ function AppointmentDetails() {
   const [saleAmount, setSaleAmount] = useState("");
   const [followUpDate, setFollowUpDate] = useState("");
   const [cancellationReason, setCancellationReason] = useState("");
-  const [meetingUrl, setMeetingUrl] = useState("");
   const [demoWebsiteUrl, setDemoWebsiteUrl] = useState("");
   const [finalWebsiteUrl, setFinalWebsiteUrl] = useState("");
   const [localDate, setLocalDate] = useState("");
   const [localTime, setLocalTime] = useState("");
-  const [timezone, setTimezone] = useState("");
-  const [duration, setDuration] = useState("30");
+  const [timezone, setTimezone] = useState("America/New_York");
 
   const [remarkText, setRemarkText] = useState("");
   const [objections, setObjections] = useState("");
@@ -107,7 +110,6 @@ function AppointmentDetails() {
 
   const canRecordOutcome = hasRole("admin") || hasRole("demo_staff");
   const canEditBooking = hasRole("admin");
-  const canManageAssignments = hasRole("admin");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -155,13 +157,15 @@ function AppointmentDetails() {
     setSaleAmount(a.sale_amount == null ? "" : String(a.sale_amount));
     setFollowUpDate(a.follow_up_date ?? "");
     setCancellationReason(a.cancellation_reason ?? "");
-    setMeetingUrl(a.meeting_url);
     setDemoWebsiteUrl(a.demo_website_url ?? "");
     setFinalWebsiteUrl(a.final_website_url ?? "");
     setLocalDate(a.local_date);
     setLocalTime(a.local_time);
-    setTimezone(a.timezone);
-    setDuration(String(a.duration_minutes));
+    setTimezone(
+      timezones.some((item) => item.value === a.timezone)
+        ? a.timezone
+        : "America/New_York",
+    );
 
     const { data: remarkData, error: remarkError } = await supabase
       .from("appointment_remarks")
@@ -213,7 +217,7 @@ function AppointmentDetails() {
         let guess = new Date(target);
 
         const formatter = new Intl.DateTimeFormat("en-GB", {
-          timeZone: timezone.trim(),
+          timeZone: timezone,
           year: "numeric",
           month: "2-digit",
           day: "2-digit",
@@ -225,7 +229,10 @@ function AppointmentDetails() {
         for (let i = 0; i < 5; i++) {
           const parts = formatter.formatToParts(guess);
           const values: Record<string, string> = {};
-          for (const part of parts) values[part.type] = part.value;
+
+          for (const part of parts) {
+            values[part.type] = part.value;
+          }
 
           const represented = Date.UTC(
             Number(values.year),
@@ -242,7 +249,10 @@ function AppointmentDetails() {
 
         const finalParts = formatter.formatToParts(guess);
         const finalValues: Record<string, string> = {};
-        for (const part of finalParts) finalValues[part.type] = part.value;
+
+        for (const part of finalParts) {
+          finalValues[part.type] = part.value;
+        }
 
         if (
           Number(finalValues.year) !== year ||
@@ -265,19 +275,11 @@ function AppointmentDetails() {
         return;
       }
 
-      if (!meetingUrl.trim()) {
-        setError("Meeting link is required.");
-        setSaving(false);
-        return;
-      }
-
       Object.assign(patch, {
         local_date: localDate,
         local_time: localTime,
-        timezone: timezone.trim(),
+        timezone,
         scheduled_at: scheduledAt,
-        duration_minutes: Number(duration),
-        meeting_url: meetingUrl.trim(),
         status,
         cancellation_reason:
           status === "cancelled" ? cancellationReason.trim() || null : null,
@@ -400,7 +402,7 @@ function AppointmentDetails() {
   }
 
   const client = appointment.clients;
-  
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -438,14 +440,10 @@ function AppointmentDetails() {
         </div>
       )}
 
-      {/* Booking Agent Information */}
       <section className="rounded-xl border bg-card p-5">
         <h2 className="mb-3 text-lg font-semibold">Booking Information</h2>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Detail
-            label="Booking Agent"
-            value={appointment.booking_agent_name}
-          />
+          <Detail label="Booking Agent" value={appointment.booking_agent_name} />
           <Detail label="Booking Reference" value={appointment.id} />
         </div>
       </section>
@@ -482,14 +480,6 @@ function AppointmentDetails() {
             label="Platform"
             value={appointment.platform === "zoom" ? "Zoom" : "Google Meet"}
           />
-          <a
-            href={appointment.meeting_url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block break-all text-sm text-primary underline"
-          >
-            Open Meeting Link
-          </a>
         </div>
       </section>
 
@@ -513,40 +503,35 @@ function AppointmentDetails() {
                 onChange={setLocalTime}
                 required
               />
-              <Field
-                label="Timezone"
-                value={timezone}
-                onChange={setTimezone}
-                required
-                placeholder="America/New_York"
-              />
+
               <div className="space-y-2">
-                <label className="text-sm font-medium">Duration</label>
+                <label htmlFor="appointment-timezone" className="text-sm font-medium">
+                  Timezone
+                </label>
                 <select
-                  value={duration}
-                  onChange={(e) => setDuration(e.target.value)}
+                  id="appointment-timezone"
+                  value={timezone}
+                  onChange={(event) => setTimezone(event.target.value)}
+                  required
                   className="w-full rounded-lg border bg-background px-3 py-2.5"
                 >
-                  <option value="15">15 minutes</option>
-                  <option value="30">30 minutes</option>
-                  <option value="45">45 minutes</option>
-                  <option value="60">60 minutes</option>
-                  <option value="90">90 minutes</option>
+                  {timezones.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
                 </select>
               </div>
-              <Field
-                label="Meeting Link"
-                type="url"
-                value={meetingUrl}
-                onChange={setMeetingUrl}
-                required
-              />
+
               <div className="space-y-2">
-                <label className="text-sm font-medium">Status</label>
+                <label htmlFor="appointment-status" className="text-sm font-medium">
+                  Status
+                </label>
                 <select
+                  id="appointment-status"
                   value={status}
-                  onChange={(e) =>
-                    setStatus(e.target.value as AppointmentStatus)
+                  onChange={(event) =>
+                    setStatus(event.target.value as AppointmentStatus)
                   }
                   className="w-full rounded-lg border bg-background px-3 py-2.5"
                 >
@@ -578,11 +563,14 @@ function AppointmentDetails() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Demo Outcome</label>
+                <label htmlFor="demo-outcome" className="text-sm font-medium">
+                  Demo Outcome
+                </label>
                 <select
+                  id="demo-outcome"
                   value={outcome}
-                  onChange={(e) =>
-                    setOutcome(e.target.value as DemoOutcome | "")
+                  onChange={(event) =>
+                    setOutcome(event.target.value as DemoOutcome | "")
                   }
                   className="w-full rounded-lg border bg-background px-3 py-2.5"
                 >
@@ -647,7 +635,6 @@ function AppointmentDetails() {
           </button>
         )}
       </form>
-
       {hasRole("demo_staff") && (
         <section className="space-y-4 rounded-xl border bg-card p-5">
           <div>
@@ -701,6 +688,7 @@ function AppointmentDetails() {
                   {remark.objections && (
                     <Detail label="Objections" value={remark.objections} />
                   )}
+
                   {remark.requested_changes && (
                     <Detail
                       label="Requested Changes"
@@ -855,6 +843,4 @@ function TextAreaField({
       />
     </div>
   );
-            }
-                
-                               
+}
