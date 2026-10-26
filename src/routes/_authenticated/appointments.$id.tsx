@@ -17,6 +17,7 @@ type Appointment = {
   id: string;
   client_id: string;
   booking_agent_id: string;
+  booking_agent_name?: string | null;
   demo_staff_id: string | null;
   local_date: string;
   local_time: string;
@@ -104,10 +105,8 @@ function AppointmentDetails() {
   const [objections, setObjections] = useState("");
   const [requestedChanges, setRequestedChanges] = useState("");
 
-  const canRecordOutcome =
-    hasRole("admin") || hasRole("demo_staff");
-  const canEditBooking =
-    hasRole("admin");
+  const canRecordOutcome = hasRole("admin") || hasRole("demo_staff");
+  const canEditBooking = hasRole("admin");
   const canManageAssignments = hasRole("admin");
 
   const loadData = useCallback(async () => {
@@ -116,9 +115,7 @@ function AppointmentDetails() {
 
     const { data, error: appointmentError } = await supabase
       .from("appointments")
-      .select(
-        "*, clients(business_name, owner_name, phone, email, country)",
-      )
+      .select("*, clients(business_name, owner_name, phone, email, country)")
       .eq("id", id)
       .maybeSingle();
 
@@ -130,12 +127,27 @@ function AppointmentDetails() {
 
     if (!data) {
       setAppointment(null);
-      setError("Appointment not found, or you do not have permission to view it.");
+      setError(
+        "Appointment not found, or you do not have permission to view it.",
+      );
       setLoading(false);
       return;
     }
 
-    const a = data as unknown as Appointment;
+    const { data: agentProfile, error: agentError } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", data.booking_agent_id)
+      .maybeSingle();
+
+    if (agentError) {
+      console.error("Booking agent name error:", agentError.message);
+    }
+
+    const a = {
+      ...(data as unknown as Appointment),
+      booking_agent_name: agentProfile?.full_name || "Name unavailable",
+    };
 
     setAppointment(a);
     setStatus(a.status);
@@ -161,7 +173,9 @@ function AppointmentDetails() {
       .limit(100);
 
     if (remarkError) {
-      setError(`Appointment loaded, but remarks could not be loaded: ${remarkError.message}`);
+      setError(
+        `Appointment loaded, but remarks could not be loaded: ${remarkError.message}`,
+      );
     } else {
       setRemarks((remarkData ?? []) as Remark[]);
     }
@@ -211,7 +225,6 @@ function AppointmentDetails() {
         for (let i = 0; i < 5; i++) {
           const parts = formatter.formatToParts(guess);
           const values: Record<string, string> = {};
-
           for (const part of parts) values[part.type] = part.value;
 
           const represented = Date.UTC(
@@ -238,7 +251,9 @@ function AppointmentDetails() {
           Number(finalValues.hour) !== hour ||
           Number(finalValues.minute) !== minute
         ) {
-          throw new Error("This date and time is invalid for the selected timezone.");
+          throw new Error(
+            "This date and time is invalid for the selected timezone.",
+          );
         }
 
         scheduledAt = guess.toISOString();
@@ -316,7 +331,6 @@ function AppointmentDetails() {
   async function deleteAppointment() {
     if (!appointment || !hasRole("admin")) return;
 
-    
     setSaving(true);
     setError("");
     setMessage("");
@@ -333,9 +347,9 @@ function AppointmentDetails() {
     }
 
     setDeleteDialogOpen(false);
-window.location.href = "/appointments/";
+    window.location.href = "/appointments/";
   }
-  
+
   async function addRemark(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -386,14 +400,13 @@ window.location.href = "/appointments/";
   }
 
   const client = appointment.clients;
-
+  
   return (
     <div className="space-y-6">
       <PageHeader
         title="Appointment Details"
         subtitle={`Booking reference: ${appointment.id}`}
         actions={
-          
           <div className="flex flex-wrap gap-2">
             <Link
               to="/appointments/"
@@ -414,7 +427,6 @@ window.location.href = "/appointments/";
               </button>
             )}
           </div>
-          
         }
       />
 
@@ -425,6 +437,18 @@ window.location.href = "/appointments/";
           {message}
         </div>
       )}
+
+      {/* Booking Agent Information */}
+      <section className="rounded-xl border bg-card p-5">
+        <h2 className="mb-3 text-lg font-semibold">Booking Information</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Detail
+            label="Booking Agent"
+            value={appointment.booking_agent_name}
+          />
+          <Detail label="Booking Reference" value={appointment.id} />
+        </div>
+      </section>
 
       <section className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-3 rounded-xl border bg-card p-5">
@@ -456,9 +480,7 @@ window.location.href = "/appointments/";
           />
           <Detail
             label="Platform"
-            value={
-              appointment.platform === "zoom" ? "Zoom" : "Google Meet"
-            }
+            value={appointment.platform === "zoom" ? "Zoom" : "Google Meet"}
           />
           <a
             href={appointment.meeting_url}
@@ -530,7 +552,9 @@ window.location.href = "/appointments/";
                 >
                   {statuses.map((item) => (
                     <option key={item} value={item}>
-                      {item.replace("_", " ").replace(/^\w/, (c) => c.toUpperCase())}
+                      {item
+                        .replace("_", " ")
+                        .replace(/^\w/, (c) => c.toUpperCase())}
                     </option>
                   ))}
                 </select>
@@ -565,7 +589,9 @@ window.location.href = "/appointments/";
                   <option value="">Not recorded</option>
                   {outcomes.map((item) => (
                     <option key={item} value={item}>
-                      {item.replaceAll("_", " ").replace(/^\w/, (c) => c.toUpperCase())}
+                      {item
+                        .replaceAll("_", " ")
+                        .replace(/^\w/, (c) => c.toUpperCase())}
                     </option>
                   ))}
                 </select>
@@ -621,78 +647,81 @@ window.location.href = "/appointments/";
           </button>
         )}
       </form>
-{hasRole("demo_staff") && (
-      <section className="space-y-4 rounded-xl border bg-card p-5">
-        <div>
-          <h2 className="text-lg font-semibold">Remarks & Activity Notes</h2>
-          <p className="text-sm text-muted-foreground">
-            Add a new note below. Existing remarks are displayed as history.
-          </p>
-        </div>
 
-        <form onSubmit={addRemark} className="space-y-4">
-          <TextAreaField
-            label="Remark *"
-            value={remarkText}
-            onChange={setRemarkText}
-            required
-            placeholder="Summarize the demo conversation..."
-          />
-          <TextAreaField
-            label="Client Objections"
-            value={objections}
-            onChange={setObjections}
-            placeholder="Budget, timing, features, or other objections..."
-          />
-          <TextAreaField
-            label="Requested Changes"
-            value={requestedChanges}
-            onChange={setRequestedChanges}
-            placeholder="Changes requested by the client..."
-          />
+      {hasRole("demo_staff") && (
+        <section className="space-y-4 rounded-xl border bg-card p-5">
+          <div>
+            <h2 className="text-lg font-semibold">Remarks & Activity Notes</h2>
+            <p className="text-sm text-muted-foreground">
+              Add a new note below. Existing remarks are displayed as history.
+            </p>
+          </div>
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-lg border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Add Remark"}
-          </button>
-        </form>
+          <form onSubmit={addRemark} className="space-y-4">
+            <TextAreaField
+              label="Remark *"
+              value={remarkText}
+              onChange={setRemarkText}
+              required
+              placeholder="Summarize the demo conversation..."
+            />
+            <TextAreaField
+              label="Client Objections"
+              value={objections}
+              onChange={setObjections}
+              placeholder="Budget, timing, features, or other objections..."
+            />
+            <TextAreaField
+              label="Requested Changes"
+              value={requestedChanges}
+              onChange={setRequestedChanges}
+              placeholder="Changes requested by the client..."
+            />
 
-        <div className="space-y-3">
-          {remarks.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No remarks yet.</p>
-          ) : (
-            remarks.map((remark) => (
-              <article
-                key={remark.id}
-                className="space-y-2 rounded-lg border p-4"
-              >
-                <p className="whitespace-pre-wrap text-sm">{remark.remark}</p>
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-lg border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+            >
+              {saving ? "Saving..." : "Add Remark"}
+            </button>
+          </form>
 
-                {remark.objections && (
-                  <Detail label="Objections" value={remark.objections} />
-                )}
-                {remark.requested_changes && (
-                  <Detail
-                    label="Requested Changes"
-                    value={remark.requested_changes}
-                  />
-                )}
+          <div className="space-y-3">
+            {remarks.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No remarks yet.</p>
+            ) : (
+              remarks.map((remark) => (
+                <article
+                  key={remark.id}
+                  className="space-y-2 rounded-lg border p-4"
+                >
+                  <p className="whitespace-pre-wrap text-sm">{remark.remark}</p>
 
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>{new Date(remark.created_at).toLocaleString()}</span>
-                  {remark.outcome_at_time && (
-                    <OutcomePill outcome={remark.outcome_at_time} />
+                  {remark.objections && (
+                    <Detail label="Objections" value={remark.objections} />
                   )}
-                </div>
-              </article>
-            ))
-          )}
-        </div>
-      </section> )}
-           {deleteDialogOpen && (
+                  {remark.requested_changes && (
+                    <Detail
+                      label="Requested Changes"
+                      value={remark.requested_changes}
+                    />
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{new Date(remark.created_at).toLocaleString()}</span>
+                    {remark.outcome_at_time && (
+                      <OutcomePill outcome={remark.outcome_at_time} />
+                    )}
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+
+      {deleteDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div
             role="alertdialog"
@@ -706,15 +735,12 @@ window.location.href = "/appointments/";
               </div>
 
               <div className="space-y-1">
-                <h2
-                  id="delete-dialog-title"
-                  className="text-lg font-semibold"
-                >
+                <h2 id="delete-dialog-title" className="text-lg font-semibold">
                   Delete Appointment?
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Are you sure you want to delete this appointment? This
-                  action cannot be undone.
+                  Are you sure you want to delete this appointment? This action
+                  cannot be undone.
                 </p>
               </div>
             </div>
@@ -827,9 +853,8 @@ function TextAreaField({
         rows={3}
         className="w-full rounded-lg border bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-primary"
       />
-      
- 
-      
     </div>
   );
-}
+            }
+                
+                               
