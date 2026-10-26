@@ -1,5 +1,6 @@
 
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
@@ -311,6 +312,33 @@ function AppointmentDetails() {
     setSaving(false);
   }
 
+  async function deleteAppointment() {
+    if (!appointment || !hasRole("admin")) return;
+
+    const confirmed = window.confirm(
+      "Kya tum waqai is appointment ko delete karna chahte ho? Is action ki history audit log mein save honi chahiye."
+    );
+
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+
+    const { error: deleteError } = await supabase
+      .from("appointments")
+      .delete()
+      .eq("id", appointment.id);
+
+    if (deleteError) {
+      setError(`Appointment delete nahi hui: ${deleteError.message}`);
+      setSaving(false);
+      return;
+    }
+
+    window.location.href = "/appointments/";
+  }
+  
   async function addRemark(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -368,12 +396,28 @@ function AppointmentDetails() {
         title="Appointment Details"
         subtitle={`Booking reference: ${appointment.id}`}
         actions={
-          <Link
-            to="/appointments/"
-            className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted"
-          >
-            Back to Appointments
-          </Link>
+          
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/appointments/"
+              className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted"
+            >
+              Back to Appointments
+            </Link>
+
+            {hasRole("admin") && (
+              <button
+                type="button"
+                onClick={() => void deleteAppointment()}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {saving ? "Please wait..." : "Delete Appointment"}
+              </button>
+            )}
+          </div>
+          
         }
       />
 
