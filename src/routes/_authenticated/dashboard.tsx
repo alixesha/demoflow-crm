@@ -1,4 +1,3 @@
-
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -10,6 +9,7 @@ import {
   Clock3,
   RefreshCw,
   TrendingUp,
+  Users,
 } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -46,10 +46,31 @@ type RecentAppointment = {
   } | null;
 };
 
+type TeamAppointment = {
+  booking_agent_id: string | null;
+  status: string | null;
+  outcome: string | null;
+  sale_amount: number | null;
+  scheduled_at: string | null;
+  follow_up_date: string | null;
+  is_demo: boolean | null;
+};
+
+type TeamAgent = {
+  user_id: string;
+  full_name: string;
+  total: number;
+  upcoming: number;
+  followUps: number;
+  sales: number;
+  salesAmount: number;
+};
+
 function Dashboard() {
   const { profile, hasRole } = useAuth();
   const isAdmin = hasRole("admin");
   const isDemoStaff = hasRole("demo_staff");
+  const canSeeTeam = isAdmin || isDemoStaff;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +80,7 @@ function Dashboard() {
   const [sales, setSales] = useState(0);
   const [salesAmount, setSalesAmount] = useState(0);
   const [recent, setRecent] = useState<RecentAppointment[]>([]);
+  const [teamAgents, setTeamAgents] = useState<TeamAgent[]>([]);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -66,7 +88,7 @@ function Dashboard() {
 
     try {
       const now = new Date().toISOString();
-      const today = new Date().toLocaleDateString("en-CA");
+      const today = new Date().toISOString().slice(0, 10);
 
       let baseQuery = supabase
         .from("appointments")
@@ -103,10 +125,12 @@ function Dashboard() {
         .order("created_at", { ascending: false })
         .limit(6);
 
-      // Agents should see their own appointment metrics.
-      // Database RLS must independently enforce the same restrictions.
-      if (!isAdmin && !isDemoStaff) {
-        const { data: sessionData } = await supabase.auth.getSession();
+      if (!canSeeTeam) {
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+
+        if (sessionError) throw sessionError;
+
         const currentUserId = sessionData.session?.user.id;
 
         if (!currentUserId) {
@@ -114,8 +138,14 @@ function Dashboard() {
         }
 
         baseQuery = baseQuery.eq("booking_agent_id", currentUserId);
-        upcomingQuery = upcomingQuery.eq("booking_agent_id", currentUserId);
-        followUpQuery = followUpQuery.eq("booking_agent_id", currentUserId);
+        upcomingQuery = upcomingQuery.eq(
+          "booking_agent_id",
+          currentUserId
+        );
+        followUpQuery = followUpQuery.eq(
+          "booking_agent_id",
+          currentUserId
+        );
         salesQuery = salesQuery.eq("booking_agent_id", currentUserId);
         recentQuery = recentQuery.eq("booking_agent_id", currentUserId);
       }
@@ -150,10 +180,112 @@ function Dashboard() {
       const soldRows = salesResult.data ?? [];
       setSales(soldRows.length);
       setSalesAmount(
-        soldRows.reduce((sum, row) => sum + (row.sale_amount ?? 0), 0)
+        soldRows.reduce(
+          (sum, row) => sum + Number(row.sale_amount ?? 0),
+          0
+        )
       );
 
-      setRecent((recentResult.data ?? []) as unknown as RecentAppointment[]);
+      setRecent(
+        (recentResult.data ?? []) as unknown as RecentAppointment[]
+      );
+
+      // Admin aur Demo Staff ke liye har booking agent ki performance.
+      if (canSeeTeam) {
+        const [rolesResult, profilesResult, appointmentsResult] =
+          await Promise.all([
+            supabase
+              .from("user_roles")
+              .select("user_id, role")
+              .eq("role", "booking_agent"),
+
+            supabase
+              .from("profiles")
+              .select("id, full_name"),
+
+            supabase
+              .from("appointments")
+              .select(
+                "booking_agent_id, status, outcome, sale_amount, scheduled_at, follow_up_date, is_demo"
+              )
+              .eq("is_demo", false),
+          ]);
+
+        const teamError =
+          rolesResult.error ||
+          profilesResult.error ||
+          appointmentsResult.error;
+
+        if (teamError) throw teamError;
+
+        const agentIds = [
+          ...new Set(
+            (rolesResult.data ?? []).map((row) => row.user_id)
+          ),
+        ];
+
+        const profileNames = new Map(
+          (profilesResult.data ?? []).map((row) => [
+            row.id,
+            row.full_name,
+          ])
+        );
+
+        const appointmentRows =
+          (appointmentsResult.data ?? []) as TeamAppointment[];
+
+        const agentStats: TeamAgent[] = agentIds.map((userId) => {
+          const agentAppointments = appointmentRows.filter(
+            (appointment) =>
+              appointment.booking_agent_id === userId
+          );
+
+          const agentUpcoming = agentAppointments.filter(
+            (appointment) =>
+              ["scheduled", "rescheduled"].includes(
+                appointment.status ?? ""
+              ) &&
+              !!appointment.scheduled_at &&
+              appointment.scheduled_at >= now
+          ).length;
+
+          const agentFollowUps = agentAppointments.filter(
+            (appointment) =>
+              appointment.outcome === "follow_up_required" &&
+              !!appointment.follow_up_date &&
+              appointment.follow_up_date <= today
+          ).length;
+
+          const soldAppointments = agentAppointments.filter(
+            (appointment) => appointment.outcome === "sold"
+          );
+
+          return {
+            user_id: userId,
+            full_name: profileNames.get(userId) || "Unnamed Agent",
+            total: agentAppointments.length,
+            upcoming: agentUpcoming,
+            followUps: agentFollowUps,
+            sales: soldAppointments.length,
+            salesAmount: soldAppointments.reduce(
+              (sum, appointment) =>
+                sum + Number(appointment.sale_amount ?? 0),
+              0
+            ),
+          };
+        });
+
+        agentStats.sort(
+          (a, b) =>
+            b.sales - a.sales ||
+            b.total - a.total ||
+            a.full_name.localeCompare(b.full_name)
+        );
+
+        setTeamAgents(agentStats);
+      } else {
+        setTeamAgents([]);
+      }
     } catch (err) {
       setError(
         err instanceof Error
@@ -163,7 +295,7 @@ function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, isDemoStaff]);
+  }, [canSeeTeam]);
 
   useEffect(() => {
     void loadDashboard();
@@ -270,6 +402,100 @@ function Dashboard() {
         )}
       </section>
 
+      {canSeeTeam && (
+        <section className="surface overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
+            <div>
+              <h2 className="font-display text-lg font-semibold">
+                Agent-wise Performance
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Individual booking results for every booking agent.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-medium text-primary">
+              <Users className="h-4 w-4" />
+              {teamAgents.length} agents
+            </div>
+          </div>
+
+          {loading ? (
+            <Loading label="Loading agent performance..." />
+          ) : teamAgents.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <Users className="mx-auto h-9 w-9 text-muted-foreground/60" />
+              <h3 className="mt-3 font-semibold">
+                No booking agents found
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Users assigned the booking_agent role will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-muted/40 text-muted-foreground">
+                  <tr>
+                    <th className="px-5 py-3 font-medium">Booking Agent</th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      Total
+                    </th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      Upcoming
+                    </th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      Follow-ups
+                    </th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      Sales
+                    </th>
+                    <th className="px-5 py-3 text-right font-medium">
+                      Sales Amount
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {teamAgents.map((agent) => (
+                    <tr
+                      key={agent.user_id}
+                      className="transition-colors hover:bg-muted/30"
+                    >
+                      <td className="px-5 py-4">
+                        <div className="font-medium">
+                          {agent.full_name}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Booking Agent
+                        </div>
+                      </td>
+                      <td className="px-4 py-4 text-right tabular-nums">
+                        {agent.total}
+                      </td>
+                      <td className="px-4 py-4 text-right tabular-nums">
+                        {agent.upcoming}
+                      </td>
+                      <td className="px-4 py-4 text-right tabular-nums">
+                        {agent.followUps}
+                      </td>
+                      <td className="px-4 py-4 text-right font-semibold tabular-nums">
+                        {agent.sales}
+                      </td>
+                      <td className="px-5 py-4 text-right font-semibold tabular-nums">
+                        {agent.salesAmount.toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
+            Sales are sorted highest first. Demo records are excluded.
+          </div>
+        </section>
+      )}
+
       <section className="surface overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
           <div>
@@ -352,5 +578,4 @@ function Dashboard() {
       </p>
     </div>
   );
-    }
-            
+                }
